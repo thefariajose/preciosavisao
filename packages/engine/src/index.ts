@@ -5,3 +5,4 @@ export * from "./seating.js";
 export * from "./trick.js";
 export * from "./prediction.js";
 export * from "./scoring.js";
+export * from "./partida.js";

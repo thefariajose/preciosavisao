@@ -6,6 +6,8 @@ export type Suit = "ouros" | "espadas" | "copas" | "paus";
 // Valor da carta já normalizado para comparação: 2..14 (J=11, Q=12, K=13, A=14).
 export type RankValue = 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14;
 
+
+//interface da carta de fato: Naipe e valor
 export interface Card {
   readonly suit: Suit;
   readonly rank: RankValue;
