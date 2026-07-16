@@ -301,6 +301,10 @@ export interface PlayerView {
   readonly playedThisRound: readonly Card[]; // público: todos veem o que já caiu
   readonly quemTemPoe: boolean;
   readonly toAct: number | null;
+  // Rodadas já concluídas desta partida, por assento. Público: o §4.7 do
+  // regulamento é explícito em "sem placar oculto — o placar é sempre visível",
+  // e previsão/vazas feitas são anunciadas na mesa de qualquer jeito.
+  readonly outcomes: readonly (readonly RoundOutcome[])[];
   readonly result: PartidaPlayerResult[] | null;
 }
 
@@ -326,6 +330,7 @@ export function playerView(state: PartidaState, seat: number): PlayerView {
     playedThisRound: state.playedThisRound.slice(),
     quemTemPoe: state.quemTemPoe,
     toAct,
+    outcomes: state.outcomes.map((rounds) => rounds.slice()),
     result: state.result,
   };
 }

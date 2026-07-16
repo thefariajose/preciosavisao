@@ -323,4 +323,32 @@ describe("redação para o cliente", () => {
     // a view não expõe o array hands completo
     expect((view as unknown as { hands?: unknown }).hands).toBeUndefined();
   });
+
+  it("expõe o placar da partida em andamento (§4.7: sem placar oculto)", () => {
+    let s = createPartida(six);
+    const hands: Card[][] = [
+      [c(14, "ouros")],
+      [c(2, "espadas")], // único trunfo → vence a vaza
+      [c(13, "paus")],
+      [c(3, "copas")],
+      [c(5, "ouros")],
+      [c(7, "paus")],
+    ];
+    s = applyAction(s, { type: "deal", hands, trump: "espadas" });
+    // nada concluído ainda
+    expect(playerView(s, 0).outcomes.every((rounds) => rounds.length === 0)).toBe(true);
+
+    s = applyAction(s, { type: "predict", seat: 0, value: 0 });
+    s = applyAction(s, { type: "predict", seat: 1, value: 1 });
+    for (const seat of [2, 3, 4]) s = applyAction(s, { type: "predict", seat, value: 0 });
+    s = applyAction(s, { type: "predict", seat: 5, value: 1 }); // trava do PÉ
+    for (let seat = 0; seat < 6; seat++) {
+      s = applyAction(s, { type: "play", seat, card: hands[seat]![0]! });
+    }
+
+    // a rodada 1 fechou: qualquer assento vê o resultado de TODOS
+    const view = playerView(s, 3);
+    expect(view.outcomes[1]).toEqual([{ prediction: 1, tricksWon: 1, roundValue: 1 }]);
+    expect(view.outcomes[5]).toEqual([{ prediction: 1, tricksWon: 0, roundValue: 1 }]);
+  });
 });

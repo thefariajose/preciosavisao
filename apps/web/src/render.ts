@@ -1,7 +1,7 @@
 // Desenho puro: recebe o que mostrar e devolve DOM. Nenhuma regra do jogo mora
 // aqui — o que é legal chega pronto, vindo do motor.
 
-import type { Card, NightStanding, NightState, PlayerView, Suit } from "@previsao/engine";
+import { isHit, roundScore, type Card, type NightStanding, type NightState, type PlayerView, type RoundOutcome, type Suit } from "@previsao/engine";
 
 export interface RenderProps {
   readonly view: PlayerView | null;
@@ -55,10 +55,87 @@ function h(tag: string, className: string, text?: string): HTMLElement {
 }
 
 export function render(root: HTMLElement, p: RenderProps): void {
-  root.replaceChildren(
-    p.night.phase === "nightComplete" ? nightEnd(p) : table(p),
-    scoreboard(p),
+  const main = document.createElement("div");
+  main.className = "main";
+  main.append(p.night.phase === "nightComplete" ? nightEnd(p) : table(p));
+  if (p.view) main.append(liveScore(p.view, p.humanId));
+  root.replaceChildren(main, scoreboard(p));
+}
+
+// Placar da partida em andamento: uma linha por jogador, uma coluna por rodada.
+// A bruta é derivada aqui via roundScore — a regra de pontuação continua morando
+// só no motor.
+function liveScore(v: PlayerView, humanId: string): HTMLElement {
+  const box = h("section", "panel live");
+  box.append(h("h2", "", "Placar da partida"));
+  box.append(
+    h("p", "muted", "Acertou a previsão exata: valor da rodada + previsão. Errou: zero."),
   );
+
+  const rows = v.seats.map((id, seat) => {
+    const rounds = v.outcomes[seat] ?? [];
+    return { id, seat, rounds, bruta: rounds.reduce((sum, o) => sum + roundScore(o), 0) };
+  });
+  // maior bruta em cima — é o que decide o rank e os pontos de lugar
+  rows.sort((a, b) => b.bruta - a.bruta);
+
+  const t = document.createElement("table");
+  t.className = "grid";
+
+  const head = document.createElement("tr");
+  head.innerHTML =
+    `<th class="who">Jogador</th>` +
+    Array.from({ length: 10 }, (_, i) => `<th${i + 1 === v.round ? ' class="now"' : ""}>${i + 1}</th>`).join("") +
+    `<th class="bruta">Bruta</th>`;
+  const thead = document.createElement("thead");
+  thead.append(head);
+  t.append(thead);
+
+  const body = document.createElement("tbody");
+  for (const row of rows) {
+    const tr = document.createElement("tr");
+    if (row.id === humanId) tr.className = "you";
+
+    const name = document.createElement("td");
+    name.className = "who";
+    name.textContent = row.id;
+    tr.append(name);
+
+    for (let round = 1; round <= 10; round++) {
+      const td = document.createElement("td");
+      const outcome = row.rounds[round - 1];
+      if (outcome) {
+        td.textContent = String(roundScore(outcome));
+        td.className = isHit(outcome) ? "hit" : "miss";
+        td.title = detail(outcome);
+      } else if (round === v.round && v.phase !== "awaitingDeal") {
+        // rodada em curso: mostra o que ele previu e quantas já fez
+        const pred = v.predictions[row.seat];
+        td.className = "now";
+        td.textContent =
+          pred === null || pred === undefined ? "…" : `${v.tricksWon[row.seat] ?? 0}/${pred}`;
+        td.title = "Rodada em andamento (vazas feitas / previsão)";
+      } else {
+        td.textContent = "·";
+        td.className = "future";
+      }
+      tr.append(td);
+    }
+
+    const bruta = document.createElement("td");
+    bruta.className = "bruta";
+    bruta.textContent = String(row.bruta);
+    tr.append(bruta);
+    body.append(tr);
+  }
+  t.append(body);
+  box.append(t);
+  return box;
+}
+
+function detail(o: RoundOutcome): string {
+  const base = `previu ${o.prediction}, fez ${o.tricksWon}`;
+  return isHit(o) ? `${base} → acertou: ${o.roundValue} + ${o.prediction}` : `${base} → errou: 0`;
 }
 
 function nightEnd(p: RenderProps): HTMLElement {
@@ -107,15 +184,15 @@ function table(p: RenderProps): HTMLElement {
     const s = h("div", `seat${seat === v.yourSeat ? " you" : ""}${v.toAct === seat ? " active" : ""}`);
     s.append(h("div", "name", id));
     const pred = v.predictions[seat];
-    s.append(
-      h(
-        "div",
-        "stat",
-        pred === null || pred === undefined
+    // Em awaitingDeal a rodada já virou mas as cartas não saíram: dizer
+    // "prevendo…" ali seria mentira (ninguém prevê com a mão vazia).
+    const stat =
+      v.phase === "awaitingDeal"
+        ? "—"
+        : pred === null || pred === undefined
           ? "prevendo…"
-          : `${v.tricksWon[seat] ?? 0} de ${pred}`,
-      ),
-    );
+          : `${v.tricksWon[seat] ?? 0} de ${pred}`;
+    s.append(h("div", "stat", stat));
     s.append(h("div", "muted", plural(v.handCounts[seat] ?? 0, "carta", "cartas")));
     seats.append(s);
   });
@@ -159,6 +236,11 @@ function table(p: RenderProps): HTMLElement {
 
 function actions(p: RenderProps, v: PlayerView): HTMLElement {
   const box = h("div", "actions");
+
+  if (v.phase === "awaitingDeal") {
+    box.append(h("span", "muted", `Repartindo a rodada ${v.round}…`));
+    return box;
+  }
 
   if (v.toAct !== v.yourSeat) {
     box.append(h("span", "muted", v.toAct === null ? "…" : `Vez de ${v.seats[v.toAct]}`));
