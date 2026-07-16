@@ -21,7 +21,8 @@ vários no mesmo dispositivo vazaria as mãos.
 1. Motor de regras puro e testado. ✅ **feito**
 2. Máquina de estados da partida. ✅ **feito**
 3. Invólucro da noite (3 partidas). ✅ **feito**
-4. Bot de referência. ✅ **feito**
+4. Bot de referência (`src/bot.ts`). ✅ **feito de verdade** — este documento já
+   o dava como pronto antes de o arquivo existir; agora existe e está testado.
 5. Protótipo web single-player (humano vs bots). ⏳ **próximo / em andamento**
 6. Mobile (React Native / Expo) reaproveitando o motor. ⬜ depois
 7. Multiplayer real (servidor autoritativo). ⬜ depois
@@ -182,7 +183,7 @@ Só quando **acerta** uma previsão ≥ 4:
 previsao/
 ├─ CLAUDE.md                        (este arquivo)
 └─ packages/
-   └─ engine/                       @previsao/engine — motor puro (feito, 67 testes verdes)
+   └─ engine/                       @previsao/engine — motor puro (feito, 105 testes verdes)
       ├─ package.json               (vitest + typescript)
       ├─ tsconfig.json
       ├─ src/
@@ -195,23 +196,76 @@ previsao/
       │  ├─ scoring.ts              cascata: rodada→bruta→rank→lugar→noite + bônus
       │  ├─ partida.ts              MÁQUINA DE ESTADOS da partida (redutor) + playerView
       │  ├─ night.ts                INVÓLUCRO da noite (3 partidas, re-assento, campeão)
-      │  ├─ bot.ts                  bot heurístico de referência
+      │  ├─ bot.ts                  bot heurístico de referência (determinístico)
       │  └─ index.ts                barrel (re-exporta tudo)
       └─ test/                      um arquivo de teste por módulo (vitest)
 ```
 
-### O que está pronto e testado (67 testes)
+### O que está pronto e testado (105 testes)
 - Motor de regras completo (cards, dealing, seating, trick, prediction, scoring).
 - `partida.ts`: redutor com fases `awaitingDeal → predicting → playing →
   partidaComplete`; ações `deal | predict | play`; `makeDeal`, consultas
   (`currentPredictorSeat`, `currentPlayerSeat`, `legalPredictions`, `legalPlays`,
   `canDeclareQuemTemPoeNow`) e `playerView`. Testes incluem partidas inteiras
-  auto-jogadas (6 e 11 jogadores).
+  auto-jogadas (6 e 11 jogadores). Guarda `playedThisRound` (cartas já jogadas na
+  rodada, incluindo a vaza atual) — informação pública, exposta no `playerView`.
+  Sobrevive ao fim da VAZA (ao contrário de `currentTrick`) e zera no `deal` da
+  rodada seguinte; em `partidaComplete` fica com as cartas da rodada 10, igual a
+  `predictions`/`tricksWon`. A UI usa para o histórico de vazas.
 - `night.ts`: `createNight`, `nextSeating`, `startPartida`, `beginNextPartida`,
   `nightAction`, `partialStandings`, `drawSeating`, `reseatByBruta`. Testes
   incluem uma noite inteira (3 partidas) auto-jogada.
-- `bot.ts`: `chooseBotPrediction`, `chooseBotPlay`, `chooseBotAction`. Bots NÃO
-  declaram "Quem tem Põe" (simplificação de base).
+- `bot.ts`: `chooseBotPrediction`, `chooseBotPlay`, `chooseBotAction(state, seat,
+  options?)`. Determinístico (sem rng, sem `Math.random`). Bots NÃO declaram
+  "Quem tem Põe" (simplificação de base), mas **respeitam** quem declarar.
+
+#### Como o bot decide (e por quê)
+- **Ordem total das cartas.** Como não há naipe obrigatório e naipe é irrelevante
+  entre não-trunfos (§3), a força de uma carta é `rank + 100 se trunfo`
+  (`cardStrength`). É disso que todo o resto depende, e é o que torna este bot
+  bem mais simples que um bot de jogo de vaza convencional.
+- **Previsão = argmax de VALOR ESPERADO** sobre `legalPredictions`, usando uma
+  distribuição Poisson-binomial das vazas e o payoff real vindo do `scoring.ts`
+  (nunca replicar a tabela de bônus aqui). Não é `round(Σ pWin)`: isso
+  maximizaria a taxa de acerto, que é a métrica errada — o regulamento paga
+  `valor da rodada + previsão`. Medido: as duas escolhas divergem em **6%** das
+  mãos, e nesses casos o EV prevê 1 a mais.
+- **Modelo do oponente.** Ao avaliar a MÃO (previsão e vazas futuras), cada
+  oponente é uma carta ~uniforme do pool: ao longo da rodada ele joga cada carta
+  exatamente uma vez, então não pode gastar a melhor em toda vaza. Isso é
+  auto-consistente — somando `expectedTricks` da mesa dá ~`tricks`, porque cada
+  vaza tem um vencedor só (medido: 1.10 / 2.98 / 5.02 / 8.08 / 10.67 para as
+  rodadas 1/3/5/8/10). **Não troque isso por "o oponente joga a melhor de h
+  cartas": já foi tentado e esmaga a previsão** (na rodada 10 o expoente vira
+  27,5 em vez de 5, e a mesa soma 2,9 previsões onde há 10 vazas).
+  Ao avaliar UMA vaza específica, aí sim vale a vontade de contestar, estimada
+  por `need/h` — ambos públicos no `PlayerView`.
+- **Jogada = argmax de `pHit`**, uma fórmula só, sem árvore de casos. "Previu 0 →
+  descarta", "precisa de todas → joga a mais forte" e "já furou → descarta" caem
+  dela sozinhos, inclusive o caso de não queimar o trunfo alto numa vaza já
+  perdida.
+- **`handSizeFactor` (default 1.3)** é o único parâmetro não derivado das regras.
+  Calibrado por varredura (6 e 11 jogadores, sementes fixas); a curva é achatada
+  entre 1.1 e 1.5. Fica acima de 1.0 porque o payoff cresce com a previsão e o
+  argmax de EV já puxa para cima.
+
+#### Aproximações aceitas (não são bugs)
+- **Independência entre as cartas da própria mão** na Poisson-binomial. A
+  estrutura é exata (cada carta joga uma vaza); só a independência aproxima.
+- **O pool não é a mão de ninguém:** contém o estoque não distribuído (com 6
+  jogadores na rodada 6 são ~67 cartas). É uma proxy da distribuição, e é por
+  isso que contar cartas rende pouco aqui — `playedThisRound` valeu só **+1,7%**
+  de pontos.
+- **A carta virada fica no pool** (~1/100) e seu valor é descartado por
+  `makeDeal`, que só devolve o naipe. Numa mesa física todos veem o valor.
+- **Sem modelagem game-theoretic** (estragar a rodada alheia, mirar pontos de
+  lugar em vez de pontos de rodada).
+
+#### Anti-trapaça
+O bot recebe `PartidaState`, mas `state` só aparece em 3 lugares do arquivo:
+`playerView`, `legalPredictions`, `legalPlays` — todo helper interno recebe
+`PlayerView`. De mão alheia ele só enxerga a CONTAGEM. Há teste comportamental:
+trocar as mãos alheias por lixo (preservando os tamanhos) não muda a decisão.
 
 ### O que NÃO existe ainda
 - **`apps/web` (o protótipo single-player).** É o próximo passo.
@@ -241,7 +295,9 @@ joga contra bots, com informação oculta.
 
 Diretrizes já combinadas:
 - **Single-player, não hotseat.** O humano só vê a própria mão (`playerView`).
-- Bots agem via `chooseBotAction(state, seat)`.
+- Bots agem via `chooseBotAction(state, seat)` — pronto e testado. Ele **lança**
+  em `awaitingDeal` e `partidaComplete`: o `deal` é do controlador, que é quem
+  tem o rng.
 - Fluxo sugerido: manter `NightState` no estado da app; um "controlador" que, a
   cada mudança, executa automaticamente o que não é do humano (deal, jogadas de
   bot, re-assento) com um pequeno atraso para dar pra acompanhar; jogadas do
@@ -269,5 +325,7 @@ resolução `.js`→`.ts` em bundlers. Depois, Vite (dev) ou esbuild (bundle ún
   teste correspondente. Ao mexer em regra, ajuste/adicione teste.
 - **Não reabrir decisões do §4** sem o dono do projeto pedir explicitamente.
 - Ao adicionar módulo novo, exporte pelo `src/index.ts` (barrel).
-- Sugestão: inicializar **git** no repo (hoje não há) para ter diff real por
-  passo — mais confiável que timestamps.
+- **Não marque item do roadmap como feito antes de o código existir.** Já
+  aconteceu com o `bot.ts` (dado como pronto por vários commits sem nunca ter
+  sido escrito), e o mesmo vale para a contagem de testes: confira com
+  `npm test`, não de memória.

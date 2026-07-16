@@ -11,6 +11,7 @@ import {
   playerView,
   type PartidaState,
 } from "../src/partida.js";
+import { roundConfig } from "../src/dealing.js";
 import type { Card } from "../src/types.js";
 
 const c = (rank: number, suit: Card["suit"]): Card => ({ rank: rank as Card["rank"], suit });
@@ -228,6 +229,87 @@ describe("partida inteira (auto-play determinístico)", () => {
     }
     expect(sawRound10).toBe(true);
     expect(s.result).toHaveLength(11);
+  });
+});
+
+describe("histórico de cartas jogadas na rodada", () => {
+  it("acumula ao longo das vazas e zera só na rodada seguinte", () => {
+    let s = createPartida(six);
+    // rodada 1: 1 carta por mão, 1 vaza
+    const hands: Card[][] = [
+      [c(14, "ouros")],
+      [c(2, "espadas")],
+      [c(13, "paus")],
+      [c(3, "copas")],
+      [c(5, "ouros")],
+      [c(7, "paus")],
+    ];
+    s = applyAction(s, { type: "deal", hands, trump: "espadas" });
+    expect(s.playedThisRound).toEqual([]);
+    for (let seat = 0; seat < 6; seat++) s = applyAction(s, { type: "predict", seat, value: 0 });
+
+    for (let seat = 0; seat < 5; seat++) {
+      s = applyAction(s, { type: "play", seat, card: hands[seat]![0]! });
+      expect(s.playedThisRound).toHaveLength(seat + 1);
+    }
+    // a última jogada fecha a vaza E a rodada: o log zera junto com a rodada
+    s = applyAction(s, { type: "play", seat: 5, card: hands[5]![0]! });
+    expect(s.round).toBe(2);
+    expect(s.playedThisRound).toEqual([]);
+  });
+
+  it("o log sobrevive ao fim da vaza, ao contrário de currentTrick", () => {
+    let s = createPartida(six);
+    // rodada 2: 2 cartas por mão, 2 vazas
+    const hands: Card[][] = [
+      [c(14, "ouros"), c(9, "ouros")],
+      [c(2, "espadas"), c(3, "espadas")],
+      [c(13, "paus"), c(12, "paus")],
+      [c(3, "copas"), c(4, "copas")],
+      [c(5, "ouros"), c(6, "ouros")],
+      [c(7, "paus"), c(8, "paus")],
+    ];
+    s = { ...s, round: 2, config: roundConfig(2, 6) };
+    s = applyAction(s, { type: "deal", hands, trump: "espadas" });
+    for (const seat of [1, 2, 3, 4, 5, 0]) s = applyAction(s, { type: "predict", seat, value: 0 });
+
+    // joga a 1ª vaza inteira (rodada 2 → o MÃO é o assento 1)
+    for (const seat of [1, 2, 3, 4, 5, 0]) {
+      s = applyAction(s, { type: "play", seat, card: hands[seat]![0]! });
+    }
+    expect(s.trickNumber).toBe(2);
+    expect(s.currentTrick).toEqual([]); // a vaza foi limpa...
+    expect(s.playedThisRound).toHaveLength(6); // ...mas o log da rodada não
+  });
+
+  it("na última rodada o log fica de pé: partidaComplete guarda as cartas da 10ª", () => {
+    // não há "rodada seguinte" para zerar, e é assim que predictions/tricksWon
+    // também se comportam ao fim da partida
+    let s = createPartida(six);
+    const rng = seededRng(2026);
+    let guard = 0;
+    while (s.phase !== "partidaComplete") {
+      if (++guard > 5000) throw new Error("loop travou");
+      if (s.phase === "awaitingDeal") {
+        s = applyAction(s, { type: "deal", ...makeDeal(6, s.config, rng) });
+      } else if (s.phase === "predicting") {
+        const seat = currentPredictorSeat(s)!;
+        s = applyAction(s, { type: "predict", seat, value: legalPredictions(s, seat)[0]! });
+      } else {
+        const seat = currentPlayerSeat(s)!;
+        s = applyAction(s, { type: "play", seat, card: legalPlays(s, seat)[0]! });
+      }
+    }
+    expect(s.playedThisRound).toHaveLength(10 * 6); // as 10 vazas da rodada 10
+  });
+
+  it("a view expõe o log (é informação pública: todos veem o que caiu)", () => {
+    let s = createPartida(six);
+    const hands: Card[][] = six.map(() => [c(9, "ouros")]);
+    s = applyAction(s, { type: "deal", hands, trump: "espadas" });
+    for (let seat = 0; seat < 6; seat++) s = applyAction(s, { type: "predict", seat, value: 0 });
+    s = applyAction(s, { type: "play", seat: 0, card: c(9, "ouros") });
+    expect(playerView(s, 3).playedThisRound).toEqual([c(9, "ouros")]);
   });
 });
 

@@ -47,6 +47,7 @@ export interface PartidaState {
   tricksWon: number[]; // por assento, na rodada atual
   trickNumber: number; // 1..tricks (0 fora da fase de vaza)
   currentTrick: Play[]; // jogadas da vaza atual, em ordem
+  playedThisRound: Card[]; // cartas já jogadas na rodada, inclusive a vaza atual
   quemTemPoe: boolean; // declarado para a vaza atual
   outcomes: RoundOutcome[][]; // outcomes[seat] = rodadas concluídas
   result: PartidaPlayerResult[] | null; // preenchido em partidaComplete
@@ -74,6 +75,7 @@ export function createPartida(seats: readonly string[]): PartidaState {
     tricksWon: Array.from({ length: numPlayers }, () => 0),
     trickNumber: 0,
     currentTrick: [],
+    playedThisRound: [],
     quemTemPoe: false,
     outcomes: Array.from({ length: numPlayers }, () => []),
     result: null,
@@ -175,6 +177,7 @@ function applyDeal(s: PartidaState, action: { hands: Card[][]; trump: Suit }): P
   s.tricksWon = Array.from({ length: s.numPlayers }, () => 0);
   s.trickNumber = 0;
   s.currentTrick = [];
+  s.playedThisRound = [];
   s.quemTemPoe = false;
   s.phase = "predicting";
   return s;
@@ -234,6 +237,10 @@ function applyPlay(
 
   hand.splice(cardIdx, 1);
   s.currentTrick.push({ seat: action.seat, card: action.card });
+  // O log da rodada sobrevive ao fim da vaza (currentTrick é limpo, este não):
+  // numa mesa física todo mundo vê o que já caiu, então é informação pública e
+  // vai para o PlayerView.
+  s.playedThisRound.push(action.card);
 
   if (s.currentTrick.length === s.numPlayers) {
     const winner = resolveTrickSeat(s.currentTrick, s.trump);
@@ -266,6 +273,7 @@ function completeRound(s: PartidaState): void {
     s.predictionTurnIdx = 0;
     s.tricksWon = Array.from({ length: s.numPlayers }, () => 0);
     s.trickNumber = 0;
+    s.playedThisRound = [];
   } else {
     s.result = computePartida(
       s.seats.map((id, seat) => ({ id, rounds: s.outcomes[seat]! })),
@@ -290,6 +298,7 @@ export interface PlayerView {
   readonly tricksWon: readonly number[];
   readonly trickNumber: number;
   readonly currentTrick: readonly Play[];
+  readonly playedThisRound: readonly Card[]; // público: todos veem o que já caiu
   readonly quemTemPoe: boolean;
   readonly toAct: number | null;
   readonly result: PartidaPlayerResult[] | null;
@@ -314,6 +323,7 @@ export function playerView(state: PartidaState, seat: number): PlayerView {
     tricksWon: state.tricksWon.slice(),
     trickNumber: state.trickNumber,
     currentTrick: state.currentTrick.slice(),
+    playedThisRound: state.playedThisRound.slice(),
     quemTemPoe: state.quemTemPoe,
     toAct,
     result: state.result,

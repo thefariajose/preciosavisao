@@ -7,3 +7,4 @@ export * from "./prediction.js";
 export * from "./scoring.js";
 export * from "./partida.js";
 export * from "./night.js";
+export * from "./bot.js";
