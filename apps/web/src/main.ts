@@ -16,22 +16,56 @@ import {
   nightAction,
   partialStandings,
   playerView,
+  resolveTrickSeat,
   type Card,
   type NightState,
+  type PartidaAction,
+  type Play,
 } from "@previsao/engine";
-import { render } from "./render.js";
+import { render, type LastTrick } from "./render.js";
 
 const HUMAN = "Você";
 const ROSTER = [HUMAN, "Bia", "Caio", "Dora", "Elis", "Fábio"];
-const BOT_DELAY_MS = 650; // pausa para dar pra acompanhar o que os bots fazem
+
+// Ritmo da mesa. Vale a pena ter os dois separados: ler uma carta nova é rápido,
+// mas ler a vaza fechada inteira e quem levou pede um tempo a mais.
+const BOT_DELAY_MS = 1500; // entre jogadas/previsões dos bots
+const TRICK_END_PAUSE_MS = 2200; // com a vaza completa na mesa, antes de limpar
 
 let night: NightState = createNight(ROSTER);
 let timer: number | null = null;
 let declareQuemTemPoe = false;
 
+// O motor resolve a vaza e limpa currentTrick na MESMA ação, então a carta que
+// fecha a vaza nunca chegaria a ser desenhada. Guardamos a vaza completa aqui
+// só para exibi-la durante a pausa — quem decide o vencedor continua sendo o
+// motor (resolveTrickSeat), não esta app.
+let lastTrick: LastTrick | null = null;
+
 // O assento do humano MUDA a cada partida por causa do re-assento por bruta.
 function humanSeat(): number {
   return night.seating.indexOf(HUMAN);
+}
+
+// Despacha uma ação e, se ela fechou a vaza, segura a vaza completa para exibir.
+// Devolve a pausa adequada ao que acabou de acontecer.
+function dispatch(action: PartidaAction): number {
+  const before = night.partida!;
+  const trickBefore = before.currentTrick.slice();
+  const trump = before.trump;
+
+  night = nightAction(night, action);
+
+  const fechouAVaza =
+    action.type === "play" && trickBefore.length === before.numPlayers - 1 && trump !== null;
+
+  if (fechouAVaza) {
+    const plays: Play[] = [...trickBefore, { seat: action.seat, card: action.card }];
+    lastTrick = { plays, winner: resolveTrickSeat(plays, trump), trump };
+    return TRICK_END_PAUSE_MS;
+  }
+  if (action.type === "play") lastTrick = null; // nova vaza começou
+  return BOT_DELAY_MS;
 }
 
 // Executa automaticamente tudo que não é decisão do humano (deal, bots,
@@ -41,7 +75,8 @@ function advance(): void {
 
   if (night.phase === "awaitingPartida") {
     night = beginNextPartida(night, Math.random);
-    return schedule();
+    lastTrick = null;
+    return schedule(BOT_DELAY_MS);
   }
 
   const partida = night.partida!;
@@ -50,7 +85,8 @@ function advance(): void {
     // a aleatoriedade vive aqui, fora do redutor
     const deal = makeDeal(partida.numPlayers, partida.config, Math.random);
     night = nightAction(night, { type: "deal", ...deal });
-    return schedule();
+    lastTrick = null;
+    return schedule(BOT_DELAY_MS);
   }
 
   const seat =
@@ -58,33 +94,33 @@ function advance(): void {
 
   if (seat === null || seat === humanSeat()) return draw(); // a vez é sua
 
-  night = nightAction(night, chooseBotAction(partida, seat));
-  return schedule();
+  return schedule(dispatch(chooseBotAction(partida, seat)));
 }
 
-function schedule(): void {
+// Desenha, espera, e só então segue. Limpar lastTrick aqui garante que a vaza
+// fique visível exatamente durante a pausa — nem menos, nem até a jogada seguinte.
+function schedule(delay: number): void {
   draw();
   if (timer !== null) clearTimeout(timer);
   timer = window.setTimeout(() => {
     timer = null;
+    lastTrick = null;
     advance();
-  }, BOT_DELAY_MS);
+  }, delay);
 }
 
 // --- Ações do humano ------------------------------------------------------
 function humanPredict(value: number): void {
-  night = nightAction(night, { type: "predict", seat: humanSeat(), value });
-  schedule();
+  schedule(dispatch({ type: "predict", seat: humanSeat(), value }));
 }
 
 function humanPlay(card: Card): void {
   const seat = humanSeat();
-  const action = declareQuemTemPoe
-    ? ({ type: "play", seat, card, declareQuemTemPoe: true } as const)
-    : ({ type: "play", seat, card } as const);
-  night = nightAction(night, action);
+  const action: PartidaAction = declareQuemTemPoe
+    ? { type: "play", seat, card, declareQuemTemPoe: true }
+    : { type: "play", seat, card };
   declareQuemTemPoe = false;
-  schedule();
+  schedule(dispatch(action));
 }
 
 function toggleQuemTemPoe(): void {
@@ -96,6 +132,7 @@ function restart(): void {
   if (timer !== null) clearTimeout(timer);
   timer = null;
   declareQuemTemPoe = false;
+  lastTrick = null;
   night = createNight(ROSTER);
   advance();
 }
@@ -117,6 +154,7 @@ function draw(): void {
   render(document.getElementById("app")!, {
     view,
     night,
+    lastTrick,
     humanId: HUMAN,
     standings: partialStandings(night),
     legalPredictions:

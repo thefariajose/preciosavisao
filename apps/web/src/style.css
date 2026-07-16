@@ -135,10 +135,33 @@ h2 {
   padding: 0.75rem;
   box-shadow: inset 0 2px 14px rgba(0, 0, 0, 0.4);
 }
+.trick.closed {
+  border-color: rgba(201, 162, 39, 0.5);
+}
 .slot {
   display: grid;
   justify-items: center;
   gap: 0.25rem;
+}
+/* trunfo na mesa: um filete de latão na base explica quem manda na vaza */
+.trick .card.is-trump {
+  border-bottom: 3px solid var(--latao);
+}
+/* a carta que levou a vaza sobe e ganha o contorno de latão */
+.slot.won .card {
+  transform: translateY(-6px);
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.5), 0 0 0 2px var(--latao);
+}
+.winner {
+  color: var(--latao);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+.trick-result {
+  text-align: center;
+  color: var(--latao);
+  font-size: 0.85rem;
+  margin: -0.5rem 0 0.5rem;
 }
 
 /* --- cartas --- */

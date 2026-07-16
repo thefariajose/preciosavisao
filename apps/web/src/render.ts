@@ -1,11 +1,23 @@
 // Desenho puro: recebe o que mostrar e devolve DOM. Nenhuma regra do jogo mora
 // aqui — o que é legal chega pronto, vindo do motor.
 
-import { isHit, roundScore, type Card, type NightStanding, type NightState, type PlayerView, type RoundOutcome, type Suit } from "@previsao/engine";
+import { isHit, roundScore, type Card, type NightStanding, type NightState, type Play, type PlayerView, type RoundOutcome, type Suit } from "@previsao/engine";
+
+// A vaza que acabou de fechar, segurada pelo controlador só para ser exibida —
+// o motor já a apagou do estado no instante em que a resolveu.
+export interface LastTrick {
+  readonly plays: readonly Play[];
+  readonly winner: number;
+  // O trunfo da rodada que a vaza pertence. Guardado porque, na ÚLTIMA vaza de
+  // uma rodada, o motor já zerou state.trump quando esta vaza vai ao ar — e sem
+  // o trunfo não dá para entender por que um 2 bateu dois ases.
+  readonly trump: Suit;
+}
 
 export interface RenderProps {
   readonly view: PlayerView | null;
   readonly night: NightState;
+  readonly lastTrick: LastTrick | null;
   readonly humanId: string;
   readonly standings: readonly NightStanding[];
   readonly legalPredictions: readonly number[];
@@ -170,9 +182,11 @@ function table(p: RenderProps): HTMLElement {
   head.append(h("span", "chip", `Partida ${p.night.partidaIndex + 1}/3`));
   head.append(h("span", "chip", `Rodada ${v.round} · vale ${v.roundValue}`));
   head.append(h("span", "chip", plural(v.tricks, "vaza", "vazas")));
-  if (v.trump) {
-    const t = h("span", `chip trump ${isRed(v.trump) ? "red" : "black"}`);
-    t.innerHTML = `Trunfo <strong>${SUIT_SYMBOL[v.trump]}</strong>`;
+  // na vaza que fecha a rodada o motor já zerou o trunfo — mostramos o da vaza
+  const trump = v.trump ?? (v.currentTrick.length === 0 ? (p.lastTrick?.trump ?? null) : null);
+  if (trump) {
+    const t = h("span", `chip trump ${isRed(trump) ? "red" : "black"}`);
+    t.innerHTML = `Trunfo <strong>${SUIT_SYMBOL[trump]}</strong>`;
     head.append(t);
   }
   if (v.quemTemPoe) head.append(h("span", "chip poe", "Quem tem Põe!"));
@@ -199,18 +213,38 @@ function table(p: RenderProps): HTMLElement {
   box.append(seats);
 
   // --- vaza no centro do feltro
-  const trick = h("div", "trick");
-  if (v.currentTrick.length === 0) {
+  // Enquanto a vaza fechada está sendo exibida, ela vence a vaza atual (que o
+  // motor já esvaziou). É o único jeito de a carta que fecha a vaza ser vista.
+  const closed = v.currentTrick.length === 0 && p.lastTrick !== null;
+  const plays: readonly Play[] = closed ? p.lastTrick!.plays : v.currentTrick;
+  const trick = h("div", `trick${closed ? " closed" : ""}`);
+
+  if (plays.length === 0) {
     trick.append(h("span", "muted", "—"));
   } else {
-    for (const play of v.currentTrick) {
-      const slot = h("div", "slot");
-      slot.append(cardEl(play.card));
-      slot.append(h("span", "muted", v.seats[play.seat] ?? ""));
+    for (const play of plays) {
+      const won = closed && play.seat === p.lastTrick!.winner;
+      const slot = h("div", `slot${won ? " won" : ""}`);
+      const el = cardEl(play.card);
+      if (trump && play.card.suit === trump) el.classList.add("is-trump");
+      slot.append(el);
+      slot.append(h("span", won ? "winner" : "muted", v.seats[play.seat] ?? ""));
       trick.append(slot);
     }
   }
   box.append(trick);
+
+  if (closed) {
+    const venceu = p.lastTrick!.plays.find((x) => x.seat === p.lastTrick!.winner)!;
+    const porTrunfo = trump !== null && venceu.card.suit === trump;
+    box.append(
+      h(
+        "div",
+        "trick-result",
+        `${v.seats[p.lastTrick!.winner] ?? ""} levou a vaza${porTrunfo ? " (trunfo)" : ""}`,
+      ),
+    );
+  }
 
   // --- sua vez
   box.append(actions(p, v));
