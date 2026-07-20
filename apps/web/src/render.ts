@@ -1,7 +1,7 @@
 // Desenho puro: recebe o que mostrar e devolve DOM. Nenhuma regra do jogo mora
 // aqui — o que é legal chega pronto, vindo do motor.
 
-import { isHit, roundScore, type Card, type NightStanding, type NightState, type Play, type PlayerView, type RoundOutcome, type Suit } from "@previsao/engine";
+import { isHit, maoSeatForRound, peSeatForRound, roundScore, type Card, type NightStanding, type NightState, type Play, type PlayerView, type RoundOutcome, type Suit } from "@previsao/engine";
 
 // A vaza que acabou de fechar, segurada pelo controlador só para ser exibida —
 // o motor já a apagou do estado no instante em que a resolveu.
@@ -170,92 +170,70 @@ function nightEnd(p: RenderProps): HTMLElement {
 }
 
 function table(p: RenderProps): HTMLElement {
-  const box = h("section", "panel");
+  const box = h("section", "table-view");
   const v = p.view;
   if (!v) {
     box.append(h("p", "muted", "Preparando a mesa…"));
     return box;
   }
 
-  // --- cabeçalho
-  const head = h("header", "head");
-  head.append(h("span", "chip", `Partida ${p.night.partidaIndex + 1}/3`));
-  head.append(h("span", "chip", `Rodada ${v.round} · vale ${v.roundValue}`));
-  head.append(h("span", "chip", plural(v.tricks, "vaza", "vazas")));
   // na vaza que fecha a rodada o motor já zerou o trunfo — mostramos o da vaza
   const trump = v.trump ?? (v.currentTrick.length === 0 ? (p.lastTrick?.trump ?? null) : null);
+  const mao = maoSeatForRound(v.round, v.numPlayers);
+  const pe = peSeatForRound(v.round, v.numPlayers);
+
+  // --- barra compacta de contexto
+  const bar = h("div", "topbar");
+  bar.append(h("span", "chip", `Partida ${p.night.partidaIndex + 1}/3`));
+  bar.append(h("span", "chip", `Rodada ${v.round} · vale ${v.roundValue}`));
+  bar.append(h("span", "chip", plural(v.tricks, "vaza", "vazas")));
+  if (v.quemTemPoe) bar.append(h("span", "chip poe", "Quem tem Põe!"));
+  box.append(bar);
+
+  // --- o feltro (herói): jogadores em volta, medalhão do trunfo, pilha central
+  const felt = h("div", "felt");
+
   if (trump) {
-    const t = h("span", `chip trump ${isRed(trump) ? "red" : "black"}`);
-    t.innerHTML = `Trunfo <strong>${SUIT_SYMBOL[trump]}</strong>`;
-    head.append(t);
+    const med = h("div", `medallion ${isRed(trump) ? "red" : "black"}`);
+    med.innerHTML = `<span class="med-suit">${SUIT_SYMBOL[trump]}</span><span class="med-label">trunfo</span>`;
+    felt.append(med);
   }
-  if (v.quemTemPoe) head.append(h("span", "chip poe", "Quem tem Põe!"));
-  box.append(head);
 
-  // --- jogadores
-  const seats = h("div", "seats");
-  v.seats.forEach((id, seat) => {
-    const s = h("div", `seat${seat === v.yourSeat ? " you" : ""}${v.toAct === seat ? " active" : ""}`);
-    s.append(h("div", "name", id));
-    const pred = v.predictions[seat];
-    // Em awaitingDeal a rodada já virou mas as cartas não saíram: dizer
-    // "prevendo…" ali seria mentira (ninguém prevê com a mão vazia).
-    const stat =
-      v.phase === "awaitingDeal"
-        ? "—"
-        : pred === null || pred === undefined
-          ? "prevendo…"
-          : `${v.tricksWon[seat] ?? 0} de ${pred}`;
-    s.append(h("div", "stat", stat));
-    s.append(h("div", "muted", plural(v.handCounts[seat] ?? 0, "carta", "cartas")));
-    seats.append(s);
-  });
-  box.append(seats);
-
-  // --- vaza no centro do feltro
-  // Enquanto a vaza fechada está sendo exibida, ela vence a vaza atual (que o
-  // motor já esvaziou). É o único jeito de a carta que fecha a vaza ser vista.
-  const closed = v.currentTrick.length === 0 && p.lastTrick !== null;
-  const plays: readonly Play[] = closed ? p.lastTrick!.plays : v.currentTrick;
-  const trick = h("div", `trick${closed ? " closed" : ""}`);
-
-  if (plays.length === 0) {
-    trick.append(h("span", "muted", "—"));
-  } else {
-    for (const play of plays) {
-      const won = closed && play.seat === p.lastTrick!.winner;
-      const slot = h("div", `slot${won ? " won" : ""}`);
-      const el = cardEl(play.card);
-      if (trump && play.card.suit === trump) el.classList.add("is-trump");
-      slot.append(el);
-      slot.append(h("span", won ? "winner" : "muted", v.seats[play.seat] ?? ""));
-      trick.append(slot);
-    }
-  }
-  box.append(trick);
-
-  if (closed) {
-    const venceu = p.lastTrick!.plays.find((x) => x.seat === p.lastTrick!.winner)!;
-    const porTrunfo = trump !== null && venceu.card.suit === trump;
-    box.append(
-      h(
-        "div",
-        "trick-result",
-        `${v.seats[p.lastTrick!.winner] ?? ""} levou a vaza${porTrunfo ? " (trunfo)" : ""}`,
-      ),
+  // oponentes distribuídos num arco pelo alto do feltro (o humano fica embaixo,
+  // representado pela própria mão). Ordenados por distância horária ao humano.
+  const opponents = v.seats
+    .map((_, seat) => seat)
+    .filter((seat) => seat !== v.yourSeat)
+    .sort(
+      (a, b) =>
+        ((a - v.yourSeat + v.numPlayers) % v.numPlayers) -
+        ((b - v.yourSeat + v.numPlayers) % v.numPlayers),
     );
-  }
 
-  // --- sua vez
-  box.append(actions(p, v));
+  opponents.forEach((seat, i) => {
+    const t = opponents.length === 1 ? 0.5 : i / (opponents.length - 1);
+    // arco de 160° a 20° pelo alto: deixa os cantos livres (medalhão à esquerda)
+    const angle = ((160 - t * 140) * Math.PI) / 180;
+    const x = 50 + 46 * Math.cos(angle);
+    const y = 50 - 36 * Math.sin(angle);
+    const badge = playerBadge(v, seat, { mao, pe, active: v.toAct === seat });
+    badge.style.left = `${x}%`;
+    badge.style.top = `${y}%`;
+    felt.append(badge);
+  });
 
-  // --- sua mão
+  // pilha da vaza no centro
+  felt.append(pile(p, v, trump));
+
+  box.append(felt);
+
+  // --- sua zona: seu status + ação + mão grande
+  const you = h("div", "you-zone");
+  you.append(playerBadge(v, v.yourSeat, { mao, pe, active: v.toAct === v.yourSeat, self: true }));
+  you.append(actions(p, v));
+
   const hand = h("div", "hand");
-  if (v.yourHand.length === 0) {
-    hand.append(h("span", "muted", "mão vazia"));
-  }
-  // Só faz sentido apagar carta quando você está ESCOLHENDO uma: fora da vez
-  // (ou prevendo) nenhuma é jogável, e apagar a mão inteira só confunde.
+  if (v.yourHand.length === 0) hand.append(h("span", "muted", "mão vazia"));
   const choosing = v.phase === "playing" && v.toAct === v.yourSeat;
   for (const card of v.yourHand) {
     const playable = p.legalPlays.some((c) => c.rank === card.rank && c.suit === card.suit);
@@ -263,9 +241,83 @@ function table(p: RenderProps): HTMLElement {
     if (playable) el.addEventListener("click", () => p.onPlay(card));
     hand.append(el);
   }
-  box.append(hand);
+  you.append(hand);
+  box.append(you);
 
   return box;
+}
+
+// Cartão de um jogador: nome, marca de MÃO/PÉ, previsão/vazas, nº de cartas.
+function playerBadge(
+  v: PlayerView,
+  seat: number,
+  o: { mao: number; pe: number; active: boolean; self?: boolean },
+): HTMLElement {
+  const badge = h(
+    "div",
+    `badge${o.self ? " self" : ""}${o.active ? " active" : ""}`,
+  );
+
+  const top = h("div", "badge-name");
+  top.append(h("span", "", v.seats[seat] ?? ""));
+  // "ficha vermelha" = MÃO (termo do regulamento); PÉ fecha a ordem de previsão
+  if (seat === o.mao) top.append(h("span", "ficha mao", "MÃO"));
+  else if (seat === o.pe) top.append(h("span", "ficha pe", "PÉ"));
+  badge.append(top);
+
+  const pred = v.predictions[seat];
+  const stat =
+    v.phase === "awaitingDeal"
+      ? "aguardando"
+      : pred === null || pred === undefined
+        ? v.toAct === seat
+          ? "prevendo…"
+          : "—"
+        : `${v.tricksWon[seat] ?? 0} de ${pred}`;
+  const hit =
+    pred !== null && pred !== undefined && (v.tricksWon[seat] ?? 0) === pred && pred > 0;
+  badge.append(h("div", `badge-stat${hit ? " on-track" : ""}`, stat));
+  badge.append(h("div", "badge-cards", plural(v.handCounts[seat] ?? 0, "carta", "cartas")));
+  return badge;
+}
+
+// A pilha da vaza no centro do feltro (o elemento-assinatura).
+function pile(p: RenderProps, v: PlayerView, trump: Suit | null): HTMLElement {
+  const closed = v.currentTrick.length === 0 && p.lastTrick !== null;
+  const plays: readonly Play[] = closed ? p.lastTrick!.plays : v.currentTrick;
+  const wrap = h("div", `pile${closed ? " closed" : ""}`);
+
+  if (plays.length === 0) {
+    wrap.append(
+      h("span", "pile-empty", v.phase === "awaitingDeal" ? "repartindo…" : "aguardando a vaza"),
+    );
+    return wrap;
+  }
+
+  const cards = h("div", "pile-cards");
+  for (const play of plays) {
+    const won = closed && play.seat === p.lastTrick!.winner;
+    const slot = h("div", `slot${won ? " won" : ""}`);
+    const el = cardEl(play.card);
+    if (trump && play.card.suit === trump) el.classList.add("is-trump");
+    slot.append(el);
+    slot.append(h("span", won ? "winner" : "muted", v.seats[play.seat] ?? ""));
+    cards.append(slot);
+  }
+  wrap.append(cards);
+
+  if (closed) {
+    const venceu = p.lastTrick!.plays.find((x) => x.seat === p.lastTrick!.winner)!;
+    const porTrunfo = trump !== null && venceu.card.suit === trump;
+    wrap.append(
+      h(
+        "div",
+        "trick-result",
+        `${v.seats[p.lastTrick!.winner] ?? ""} levou a vaza${porTrunfo ? " (trunfo)" : ""}`,
+      ),
+    );
+  }
+  return wrap;
 }
 
 function actions(p: RenderProps, v: PlayerView): HTMLElement {

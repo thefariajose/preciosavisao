@@ -29,8 +29,11 @@ const ROSTER = [HUMAN, "Bia", "Caio", "Dora", "Elis", "Fábio"];
 
 // Ritmo da mesa. Vale a pena ter os dois separados: ler uma carta nova é rápido,
 // mas ler a vaza fechada inteira e quem levou pede um tempo a mais.
-const BOT_DELAY_MS = 1500; // entre jogadas/previsões dos bots
-const TRICK_END_PAUSE_MS = 2200; // com a vaza completa na mesa, antes de limpar
+// `?turbo` na URL zera as pausas — atalho para verificar telas de fim de partida
+// e de campeão sem esperar a noite inteira.
+const TURBO = new URLSearchParams(location.search).has("turbo");
+const BOT_DELAY_MS = TURBO ? 10 : 1500; // entre jogadas/previsões dos bots
+const TRICK_END_PAUSE_MS = TURBO ? 30 : 2200; // com a vaza completa, antes de limpar
 
 let night: NightState = createNight(ROSTER);
 let timer: number | null = null;
