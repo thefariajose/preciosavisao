@@ -56,6 +56,7 @@ function dispatch(action: PartidaAction): number {
   const before = night.partida!;
   const trickBefore = before.currentTrick.slice();
   const trump = before.trump;
+  const roundBefore = before.round;
 
   night = nightAction(night, action);
 
@@ -63,11 +64,18 @@ function dispatch(action: PartidaAction): number {
     action.type === "play" && trickBefore.length === before.numPlayers - 1 && trump !== null;
 
   if (fechouAVaza) {
-    const plays: Play[] = [...trickBefore, { seat: action.seat, card: action.card }];
-    lastTrick = { plays, winner: resolveTrickSeat(plays, trump), trump };
-    return TRICK_END_PAUSE_MS;
+    // Se a vaza também FECHOU A RODADA, o motor já zerou as mãos e avançou —
+    // segurar a vaza aqui mostraria o cabeçalho da rodada seguinte com todos em
+    // "0 cartas" sobre uma vaza cheia. Nesse caso não seguramos: vai direto para
+    // o "repartindo…" da próxima rodada, que é coerente.
+    const rodadaVirou = night.partida === null || night.partida.round !== roundBefore;
+    if (!rodadaVirou) {
+      const plays: Play[] = [...trickBefore, { seat: action.seat, card: action.card }];
+      lastTrick = { plays, winner: resolveTrickSeat(plays, trump), trump };
+      return TRICK_END_PAUSE_MS;
+    }
   }
-  if (action.type === "play") lastTrick = null; // nova vaza começou
+  if (action.type === "play") lastTrick = null; // nova vaza (ou nova rodada)
   return BOT_DELAY_MS;
 }
 
@@ -108,22 +116,58 @@ function schedule(delay: number): void {
   timer = window.setTimeout(() => {
     timer = null;
     lastTrick = null;
-    advance();
+    guard(advance);
   }, delay);
 }
 
+// Rede de segurança do controlador: qualquer exceção inesperada mostra um aviso
+// recuperável em vez de deixar a página congelada e muda. Não deveria disparar —
+// se disparar, é bug e queremos vê-lo, não escondê-lo.
+function guard(fn: () => void): void {
+  try {
+    fn();
+  } catch (err) {
+    if (timer !== null) clearTimeout(timer);
+    timer = null;
+    console.error("Erro no controlador da partida:", err);
+    fail(err);
+  }
+}
+
+function fail(err: unknown): void {
+  const app = document.getElementById("app");
+  if (!app) return;
+  const panel = document.createElement("section");
+  panel.className = "panel end";
+  const msg = err instanceof Error ? err.message : String(err);
+  panel.innerHTML = `<h1>Algo saiu do trilho</h1><p class="champion">${msg}</p>`;
+  const btn = document.createElement("button");
+  btn.className = "primary";
+  btn.textContent = "Reiniciar a noite";
+  btn.addEventListener("click", restart);
+  panel.append(btn);
+  app.replaceChildren(panel);
+}
+
 // --- Ações do humano ------------------------------------------------------
+// As guardas de turno descartam cliques fora de hora — sobretudo o clique duplo
+// rápido numa carta, que senão despacharia uma jogada já consumida e o motor
+// rejeitaria (carta fora da mão).
 function humanPredict(value: number): void {
-  schedule(dispatch({ type: "predict", seat: humanSeat(), value }));
+  const partida = night.partida;
+  if (!partida || currentPredictorSeat(partida) !== humanSeat()) return;
+  guard(() => schedule(dispatch({ type: "predict", seat: humanSeat(), value })));
 }
 
 function humanPlay(card: Card): void {
+  const partida = night.partida;
   const seat = humanSeat();
+  if (!partida || currentPlayerSeat(partida) !== seat) return;
   const action: PartidaAction = declareQuemTemPoe
     ? { type: "play", seat, card, declareQuemTemPoe: true }
     : { type: "play", seat, card };
   declareQuemTemPoe = false;
-  schedule(dispatch(action));
+  guard(() => schedule(dispatch(action)));
 }
 
 function toggleQuemTemPoe(): void {
@@ -137,7 +181,7 @@ function restart(): void {
   declareQuemTemPoe = false;
   lastTrick = null;
   night = createNight(ROSTER);
-  advance();
+  guard(advance);
 }
 
 // --- Desenho --------------------------------------------------------------
@@ -172,4 +216,4 @@ function draw(): void {
   });
 }
 
-advance();
+guard(advance);
