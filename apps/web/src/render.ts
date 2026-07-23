@@ -49,10 +49,18 @@ const isRed = (suit: Suit): boolean => suit === "ouros" || suit === "copas";
 
 function cardEl(card: Card, opts: { playable?: boolean; dimmed?: boolean } = {}): HTMLElement {
   const el = document.createElement(opts.playable ? "button" : "div");
-  el.className = `card ${isRed(card.suit) ? "red" : "black"}${opts.playable ? " playable" : ""}${
+  const face = card.rank >= 11 ? " face" : "";
+  el.className = `card ${isRed(card.suit) ? "red" : "black"}${face}${opts.playable ? " playable" : ""}${
     opts.dimmed ? " dimmed" : ""
   }`;
-  el.innerHTML = `<span class="rank">${rankText(card.rank)}</span><span class="suit">${SUIT_SYMBOL[card.suit]}</span>`;
+  const r = rankText(card.rank);
+  const s = SUIT_SYMBOL[card.suit];
+  const corner = `<span class="cr">${r}</span><span class="cs">${s}</span>`;
+  // carta de baralho de verdade: índices espelhados nos cantos + naipe central
+  el.innerHTML =
+    `<span class="corner tl">${corner}</span>` +
+    `<span class="pip">${s}</span>` +
+    `<span class="corner br">${corner}</span>`;
   return el;
 }
 
@@ -152,15 +160,20 @@ function detail(o: RoundOutcome): string {
 
 function nightEnd(p: RenderProps): HTMLElement {
   const box = h("section", "panel end");
-  box.append(h("h1", "", "Fim da noite"));
   const champs = p.night.champions ?? [];
+  const venceu = champs.includes(p.humanId);
+
+  box.append(h("div", "trophy", venceu ? "🏆" : "🃏"));
+  box.append(h("h1", "", "Fim da noite"));
+  box.append(
+    h("p", "champ-label", champs.length > 1 ? "Co-campeões" : "Campeão"),
+  );
+  box.append(h("p", "champion", champs.join(" · ") || "—"));
   box.append(
     h(
       "p",
-      "champion",
-      champs.length > 1
-        ? `Co-campeões: ${champs.join(", ")}`
-        : `Campeão: ${champs[0] ?? "—"}`,
+      "muted",
+      venceu ? "Você levou a noite. Mãos de mestre." : "A próxima é sua.",
     ),
   );
   const again = h("button", "primary", "Jogar de novo");
@@ -235,12 +248,15 @@ function table(p: RenderProps): HTMLElement {
   const hand = h("div", "hand");
   if (v.yourHand.length === 0) hand.append(h("span", "muted", "mão vazia"));
   const choosing = v.phase === "playing" && v.toAct === v.yourSeat;
-  for (const card of v.yourHand) {
+  v.yourHand.forEach((card, i) => {
     const playable = p.legalPlays.some((c) => c.rank === card.rank && c.suit === card.suit);
     const el = cardEl(card, { playable, dimmed: choosing && !playable });
+    // arco suave na mão, como um leque segurado
+    const rot = (i - (v.yourHand.length - 1) / 2) * 2.2;
+    el.style.setProperty("--rot", `${rot.toFixed(1)}deg`);
     if (playable) el.addEventListener("click", () => p.onPlay(card));
     hand.append(el);
-  }
+  });
   you.append(hand);
   box.append(you);
 
@@ -258,8 +274,12 @@ function playerBadge(
     `badge${o.self ? " self" : ""}${o.active ? " active" : ""}`,
   );
 
+  const name = v.seats[seat] ?? "?";
   const top = h("div", "badge-name");
-  top.append(h("span", "", v.seats[seat] ?? ""));
+  const avatar = h("div", "avatar", name.charAt(0).toUpperCase());
+  avatar.style.setProperty("--hue", String((seat * 53) % 360)); // cor estável por assento
+  top.append(avatar);
+  top.append(h("span", "badge-nick", name));
   // "ficha vermelha" = MÃO (termo do regulamento); PÉ fecha a ordem de previsão
   if (seat === o.mao) top.append(h("span", "ficha mao", "MÃO"));
   else if (seat === o.pe) top.append(h("span", "ficha pe", "PÉ"));
@@ -295,15 +315,18 @@ function pile(p: RenderProps, v: PlayerView, trump: Suit | null): HTMLElement {
   }
 
   const cards = h("div", "pile-cards");
-  for (const play of plays) {
+  plays.forEach((play, i) => {
     const won = closed && play.seat === p.lastTrick!.winner;
     const slot = h("div", `slot${won ? " won" : ""}`);
     const el = cardEl(play.card);
+    // leque: cada carta cai com uma leve inclinação, como jogada na mesa
+    const rot = (i - (plays.length - 1) / 2) * 5;
+    el.style.setProperty("--rot", `${rot.toFixed(1)}deg`);
     if (trump && play.card.suit === trump) el.classList.add("is-trump");
     slot.append(el);
     slot.append(h("span", won ? "winner" : "muted", v.seats[play.seat] ?? ""));
     cards.append(slot);
-  }
+  });
   wrap.append(cards);
 
   if (closed) {
