@@ -1,7 +1,7 @@
 // Desenho puro: recebe o que mostrar e devolve DOM. Nenhuma regra do jogo mora
 // aqui — o que é legal chega pronto, vindo do motor.
 
-import { isHit, maoSeatForRound, peSeatForRound, roundScore, type Card, type NightStanding, type NightState, type Play, type PlayerView, type RoundOutcome, type Suit } from "@previsao/engine";
+import { isHit, maoSeatForRound, peSeatForRound, roundScore, type Card, type NightStanding, type NightState, type PartidaPlayerResult, type Play, type PlayerView, type RoundOutcome, type Suit } from "@previsao/engine";
 
 // A vaza que acabou de fechar, segurada pelo controlador só para ser exibida —
 // o motor já a apagou do estado no instante em que a resolveu.
@@ -14,10 +14,24 @@ export interface LastTrick {
   readonly trump: Suit;
 }
 
+// Momentos de pausa entre a ação contínua: fecham uma rodada ou uma partida e
+// dão ao jogador tempo de ler o que aconteceu. O controlador os monta e segura.
+export interface RoundLine {
+  readonly id: string;
+  readonly prediction: number;
+  readonly tricksWon: number;
+  readonly roundValue: number;
+}
+export type Interlude =
+  | { readonly kind: "round"; readonly round: number; readonly lines: readonly RoundLine[]; readonly lastTrick: LastTrick | null }
+  | { readonly kind: "partida"; readonly index: number; readonly results: readonly PartidaPlayerResult[]; readonly nextSeating: readonly string[] };
+
 export interface RenderProps {
   readonly view: PlayerView | null;
   readonly night: NightState;
   readonly lastTrick: LastTrick | null;
+  readonly interlude: Interlude | null;
+  readonly showHelp: boolean;
   readonly humanId: string;
   readonly standings: readonly NightStanding[];
   readonly legalPredictions: readonly number[];
@@ -27,6 +41,8 @@ export interface RenderProps {
   readonly onPredict: (value: number) => void;
   readonly onPlay: (card: Card) => void;
   readonly onToggleQuemTemPoe: () => void;
+  readonly onContinue: () => void;
+  readonly onToggleHelp: () => void;
   readonly onRestart: () => void;
 }
 
@@ -79,7 +95,168 @@ export function render(root: HTMLElement, p: RenderProps): void {
   main.className = "main";
   main.append(p.night.phase === "nightComplete" ? nightEnd(p) : table(p));
   if (p.view) main.append(liveScore(p.view, p.humanId));
-  root.replaceChildren(main, scoreboard(p));
+
+  const children: HTMLElement[] = [main, scoreboard(p)];
+  // overlays por cima de tudo
+  if (p.interlude) children.push(interludeOverlay(p));
+  if (p.showHelp) children.push(helpOverlay(p));
+  root.replaceChildren(...children);
+}
+
+// Botão de regras, sempre acessível na barra de contexto.
+function rulesButton(p: RenderProps): HTMLElement {
+  const b = h("button", "chip rules-btn", "Regras");
+  b.addEventListener("click", p.onToggleHelp);
+  return b;
+}
+
+// ================= interlúdios (fim de rodada / fim de partida) =================
+function interludeOverlay(p: RenderProps): HTMLElement {
+  const back = h("div", "overlay");
+  back.append(p.interlude!.kind === "round" ? roundPanel(p) : partidaPanel(p));
+  return back;
+}
+
+function roundPanel(p: RenderProps): HTMLElement {
+  const it = p.interlude as Extract<Interlude, { kind: "round" }>;
+  const box = h("section", "panel modal round-end");
+  box.append(h("h2", "", `Rodada ${it.round} encerrada`));
+
+  // a última vaza da rodada, coerente (o overlay não depende do estado avançado)
+  if (it.lastTrick) {
+    const lt = it.lastTrick;
+    const venceu = lt.plays.find((x) => x.seat === lt.winner)!;
+    const nome = nameFor(p, lt.winner);
+    const porTrunfo = venceu.card.suit === lt.trump;
+    const row = h("div", "last-trick");
+    const c = cardEl(venceu.card);
+    if (porTrunfo) c.classList.add("is-trump");
+    row.append(c);
+    row.append(h("span", "", `${nome} levou a última vaza${porTrunfo ? " (trunfo)" : ""}`));
+    box.append(row);
+  }
+
+  const lines = [...it.lines].sort((a, b) => roundScore(b) - roundScore(a));
+  const t = document.createElement("table");
+  t.className = "tally";
+  t.innerHTML = "<thead><tr><th>Jogador</th><th>Previu</th><th>Fez</th><th>Pontos</th></tr></thead>";
+  const body = document.createElement("tbody");
+  for (const l of lines) {
+    const hit = isHit(l);
+    const tr = document.createElement("tr");
+    tr.className = `${l.id === p.humanId ? "you " : ""}${hit ? "hit" : "miss"}`;
+    tr.innerHTML =
+      `<td>${l.id}</td><td>${l.prediction}</td><td>${l.tricksWon}</td>` +
+      `<td>${hit ? `+${roundScore(l)}` : "0"}</td>`;
+    body.append(tr);
+  }
+  t.append(body);
+  box.append(t);
+
+  box.append(actionRow("Continuar", p.onContinue));
+  return box;
+}
+
+function partidaPanel(p: RenderProps): HTMLElement {
+  const it = p.interlude as Extract<Interlude, { kind: "partida" }>;
+  const box = h("section", "panel modal partida-end");
+  box.append(h("h1", "", `Partida ${it.index + 1} de 3 encerrada`));
+  box.append(h("p", "muted", "A bruta decide a colocação; sobem pontos de lugar + bônus."));
+
+  const rows = [...it.results].sort((a, b) => a.rank - b.rank);
+  const t = document.createElement("table");
+  t.className = "tally wide";
+  t.innerHTML =
+    "<thead><tr><th>#</th><th>Jogador</th><th>Bruta</th><th>Lugar</th><th>Alta</th><th>≥60</th><th>Noite</th></tr></thead>";
+  const body = document.createElement("tbody");
+  for (const r of rows) {
+    const tr = document.createElement("tr");
+    if (r.id === p.humanId) tr.className = "you";
+    tr.innerHTML =
+      `<td>${r.rank}º</td><td>${r.id}</td><td>${r.bruta}</td><td>${r.placePoints}</td>` +
+      `<td>${r.highHitBonus || "—"}</td><td>${r.bandBonus || "—"}</td><td class="tot">${r.nightContribution}</td>`;
+    body.append(tr);
+  }
+  t.append(body);
+  box.append(t);
+
+  // o re-assento visível: melhor bruta senta na cabeça (é MÃO da rodada 1)
+  const reseat = h("div", "reseat");
+  reseat.append(h("h2", "", "Próxima partida — ordem pela bruta"));
+  const order = h("div", "seat-order");
+  it.nextSeating.forEach((id, i) => {
+    const chip = h("span", `seat-chip${id === p.humanId ? " you" : ""}${i === 0 ? " head" : ""}`);
+    chip.textContent = i === 0 ? `${id} · cabeça` : id;
+    order.append(chip);
+  });
+  reseat.append(order);
+  box.append(reseat);
+
+  box.append(actionRow("Próxima partida", p.onContinue));
+  return box;
+}
+
+// ================= regras / ajuda =================
+function helpOverlay(p: RenderProps): HTMLElement {
+  const back = h("div", "overlay");
+  back.addEventListener("click", (e) => {
+    if (e.target === back) p.onToggleHelp(); // clicar fora fecha
+  });
+  const box = h("section", "panel modal help");
+  box.append(h("h1", "", "Como se joga o Previsão"));
+
+  const secs: [string, string][] = [
+    [
+      "Objetivo",
+      "Em cada rodada você prevê quantas vazas vai fazer e tenta acertar EXATO. A rodada N reparte N cartas (rodada 1 = 1 carta … rodada 10 = 10).",
+    ],
+    [
+      "Trunfo",
+      "Antes das previsões, vira-se uma carta: o naipe dela é o trunfo da rodada. Trunfo vence qualquer naipe comum; entre trunfos, vence o maior.",
+    ],
+    [
+      "Previsão e a trava do PÉ",
+      "Prevê-se do MÃO (ficha vermelha) até o PÉ, no horário. A soma de todas as previsões NÃO pode dar o nº de vazas — o PÉ é obrigado a ajustar. Sempre há ao menos um erro na mesa.",
+    ],
+    [
+      "Vazas",
+      "Não há obrigação de seguir naipe: jogue qualquer carta. Sem trunfo na mesa, vence a maior carta (o naipe não importa entre não-trunfos). Empate de valor idêntico → vence quem jogou primeiro.",
+    ],
+    [
+      "Quem tem Põe",
+      "Só quem puxa a vaza pode declarar, e só puxando um trunfo. Obriga todos que tenham trunfo a jogar trunfo. (Os bots não declaram, mas respeitam.)",
+    ],
+    [
+      "Pontos por rodada",
+      "Acertou a previsão exata: valor da rodada + previsão. Errou (pra mais ou pra menos): zero. Acertar previsão ≥ 4 dá bônus extra (4→+4, 5→+5, 6→+7, 7+→+10).",
+    ],
+    [
+      "A noite (3 partidas)",
+      "A bruta (soma das 10 rodadas) decide a colocação na partida e libera o bônus de ≥60. Para a noite sobem só os pontos de lugar + bônus. Entre partidas, re-assenta-se pela bruta. Maior total nas 3 partidas é o campeão.",
+    ],
+  ];
+  for (const [title, txt] of secs) {
+    const sec = h("div", "help-sec");
+    sec.append(h("h3", "", title));
+    sec.append(h("p", "", txt));
+    box.append(sec);
+  }
+
+  box.append(actionRow("Fechar", p.onToggleHelp));
+  back.append(box);
+  return back;
+}
+
+function actionRow(label: string, onClick: () => void): HTMLElement {
+  const row = h("div", "modal-actions");
+  const b = h("button", "primary", label);
+  b.addEventListener("click", onClick);
+  row.append(b);
+  return row;
+}
+
+function nameFor(p: RenderProps, seat: number): string {
+  return p.view?.seats[seat] ?? p.night.seating[seat] ?? "";
 }
 
 // Placar da partida em andamento: uma linha por jogador, uma coluna por rodada.
@@ -201,6 +378,7 @@ function table(p: RenderProps): HTMLElement {
   bar.append(h("span", "chip", `Rodada ${v.round} · vale ${v.roundValue}`));
   bar.append(h("span", "chip", plural(v.tricks, "vaza", "vazas")));
   if (v.quemTemPoe) bar.append(h("span", "chip poe", "Quem tem Põe!"));
+  bar.append(rulesButton(p));
   box.append(bar);
 
   // --- o feltro (herói): jogadores em volta, medalhão do trunfo, pilha central

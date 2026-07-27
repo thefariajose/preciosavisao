@@ -610,6 +610,168 @@ h2 {
   margin-top: 1.3rem;
 }
 
+/* ================= botão de regras ================= */
+.rules-btn {
+  margin-left: auto;
+  cursor: pointer;
+  color: var(--texto);
+  font: inherit;
+  font-size: 0.8rem;
+  transition: background 0.12s, transform 0.1s;
+}
+.rules-btn:hover {
+  background: linear-gradient(180deg, var(--latao), var(--latao-escuro));
+  color: #2a1f00;
+  transform: translateY(-1px);
+}
+
+/* ================= overlays / modais ================= */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-content: center;
+  padding: 1.5rem;
+  background: rgba(4, 12, 9, 0.72);
+  backdrop-filter: blur(4px);
+  animation: fadeIn 0.18s ease;
+}
+.modal {
+  width: min(92vw, 560px);
+  max-height: 88vh;
+  overflow-y: auto;
+  text-align: center;
+  animation: rise 0.22s ease;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+}
+.modal h1 {
+  font-size: 1.5rem;
+  margin-bottom: 0.3rem;
+}
+.modal h2 {
+  margin-top: 0;
+}
+.modal-actions {
+  margin-top: 1.3rem;
+}
+
+/* fim de rodada */
+.last-trick {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.7rem;
+  margin: 0.4rem 0 1rem;
+  color: var(--latao);
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+/* tabelas dos interlúdios */
+.tally {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+.tally th {
+  color: rgba(242, 236, 218, 0.45);
+  font-weight: 500;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0.3rem 0.5rem;
+  text-align: right;
+}
+.tally th:first-child,
+.tally td:first-child {
+  text-align: left;
+}
+.tally td {
+  padding: 0.4rem 0.5rem;
+  text-align: right;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+.tally tr.hit td:last-child {
+  color: var(--latao);
+  font-weight: 800;
+}
+.tally tr.miss td:last-child {
+  color: rgba(240, 130, 135, 0.6);
+}
+.tally tr.you td {
+  color: var(--latao);
+  font-weight: 600;
+}
+.tally .tot {
+  font-weight: 800;
+  color: var(--verde-ok);
+}
+
+/* fim de partida — re-assento */
+.reseat {
+  margin-top: 1.3rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(212, 175, 55, 0.2);
+}
+.seat-order {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  justify-content: center;
+}
+.seat-chip {
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(212, 175, 55, 0.22);
+  border-radius: 999px;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.82rem;
+}
+.seat-chip.head {
+  background: linear-gradient(180deg, var(--latao), var(--latao-escuro));
+  color: #2a1f00;
+  font-weight: 700;
+  border-color: var(--latao);
+}
+.seat-chip.you {
+  outline: 1px solid var(--latao);
+}
+
+/* regras */
+.help {
+  text-align: left;
+}
+.help h1 {
+  text-align: center;
+}
+.help-sec {
+  margin-top: 0.9rem;
+}
+.help-sec h3 {
+  color: var(--latao);
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+  margin-bottom: 0.15rem;
+}
+.help-sec p {
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: rgba(242, 236, 218, 0.82);
+}
+.help .modal-actions {
+  text-align: center;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 /* ================= vida ambiente ================= */
 @keyframes pulseGlow {
   0%,

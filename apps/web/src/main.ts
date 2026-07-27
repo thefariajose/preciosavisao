@@ -4,7 +4,6 @@
 // e (b) desenha o playerView do assento dele. Nenhuma regra vive aqui.
 
 import {
-  beginNextPartida,
   canDeclareQuemTemPoeNow,
   chooseBotAction,
   createNight,
@@ -13,16 +12,18 @@ import {
   legalPlays,
   legalPredictions,
   makeDeal,
+  nextSeating,
   nightAction,
   partialStandings,
   playerView,
   resolveTrickSeat,
+  startPartida,
   type Card,
   type NightState,
   type PartidaAction,
   type Play,
 } from "@previsao/engine";
-import { render, type LastTrick } from "./render.js";
+import { render, type Interlude, type LastTrick } from "./render.js";
 
 const HUMAN = "Você";
 const ROSTER = [HUMAN, "Bia", "Caio", "Dora", "Elis", "Fábio"];
@@ -34,10 +35,12 @@ const ROSTER = [HUMAN, "Bia", "Caio", "Dora", "Elis", "Fábio"];
 const TURBO = new URLSearchParams(location.search).has("turbo");
 const BOT_DELAY_MS = TURBO ? 10 : 1500; // entre jogadas/previsões dos bots
 const TRICK_END_PAUSE_MS = TURBO ? 30 : 2200; // com a vaza completa, antes de limpar
+const ROUND_INTERLUDE_MS = TURBO ? 30 : 4000; // fim de rodada auto-avança (com botão de pular)
 
 let night: NightState = createNight(ROSTER);
 let timer: number | null = null;
 let declareQuemTemPoe = false;
+let showHelp = false;
 
 // O motor resolve a vaza e limpa currentTrick na MESMA ação, então a carta que
 // fecha a vaza nunca chegaria a ser desenhada. Guardamos a vaza completa aqui
@@ -45,13 +48,22 @@ let declareQuemTemPoe = false;
 // motor (resolveTrickSeat), não esta app.
 let lastTrick: LastTrick | null = null;
 
+// Momento de pausa (fim de rodada / fim de partida) sendo exibido. Enquanto
+// setado, o fluxo espera: rodada auto-avança em ROUND_INTERLUDE_MS; partida
+// espera o clique em "Próxima partida".
+let interlude: Interlude | null = null;
+// Assento já resolvido para a próxima partida — calculado no fim da anterior
+// para que o que o overlay anuncia seja exatamente o que vai valer.
+let pendingSeating: readonly string[] | null = null;
+
 // O assento do humano MUDA a cada partida por causa do re-assento por bruta.
 function humanSeat(): number {
   return night.seating.indexOf(HUMAN);
 }
 
-// Despacha uma ação e, se ela fechou a vaza, segura a vaza completa para exibir.
-// Devolve a pausa adequada ao que acabou de acontecer.
+// Despacha uma ação. Detecta o que ela desencadeou (vaza fechada, fim de rodada,
+// fim de partida) e monta o momento de pausa correspondente. Devolve a pausa em
+// ms para uma vaza normal; para interlúdios devolve 0 (o schedule cuida deles).
 function dispatch(action: PartidaAction): number {
   const before = night.partida!;
   const trickBefore = before.currentTrick.slice();
@@ -62,30 +74,60 @@ function dispatch(action: PartidaAction): number {
 
   const fechouAVaza =
     action.type === "play" && trickBefore.length === before.numPlayers - 1 && trump !== null;
+  const closedTrick: LastTrick | null = fechouAVaza
+    ? (() => {
+        const plays: Play[] = [...trickBefore, { seat: action.seat, card: action.card }];
+        return { plays, winner: resolveTrickSeat(plays, trump!), trump: trump! };
+      })()
+    : null;
 
-  if (fechouAVaza) {
-    // Se a vaza também FECHOU A RODADA, o motor já zerou as mãos e avançou —
-    // segurar a vaza aqui mostraria o cabeçalho da rodada seguinte com todos em
-    // "0 cartas" sobre uma vaza cheia. Nesse caso não seguramos: vai direto para
-    // o "repartindo…" da próxima rodada, que é coerente.
-    const rodadaVirou = night.partida === null || night.partida.round !== roundBefore;
-    if (!rodadaVirou) {
-      const plays: Play[] = [...trickBefore, { seat: action.seat, card: action.card }];
-      lastTrick = { plays, winner: resolveTrickSeat(plays, trump), trump };
-      return TRICK_END_PAUSE_MS;
-    }
+  // Partida terminou (rodada 10 fechou), mas ainda há noite → resumo + re-assento.
+  if (night.partida === null && night.phase === "awaitingPartida") {
+    const idx = night.partidaIndex - 1;
+    pendingSeating = nextSeating(night, Math.random);
+    interlude = { kind: "partida", index: idx, results: night.results[idx]!, nextSeating: pendingSeating };
+    lastTrick = null;
+    return 0;
   }
-  if (action.type === "play") lastTrick = null; // nova vaza (ou nova rodada)
+  // Noite terminou → a tela de campeão já é o resumo (sem interlúdio).
+  if (night.phase === "nightComplete") {
+    lastTrick = null;
+    return 0;
+  }
+  // Rodada terminou, mas a partida continua → resumo da rodada + última vaza.
+  if (night.partida && night.partida.round > roundBefore) {
+    interlude = buildRoundInterlude(roundBefore, closedTrick);
+    lastTrick = null;
+    return 0;
+  }
+  // Vaza fechou no meio da rodada → segura a mesa por um tempo.
+  if (closedTrick) {
+    lastTrick = closedTrick;
+    return TRICK_END_PAUSE_MS;
+  }
+  if (action.type === "play") lastTrick = null; // nova vaza começou
   return BOT_DELAY_MS;
 }
 
-// Executa automaticamente tudo que não é decisão do humano (deal, bots,
-// início de partida) e para assim que a vez for dele.
+function buildRoundInterlude(round: number, closedTrick: LastTrick | null): Interlude {
+  const p = night.partida!;
+  const lines = p.seats.map((id, seat) => {
+    const o = p.outcomes[seat]![round - 1]!; // a rodada recém-concluída
+    return { id, prediction: o.prediction, tricksWon: o.tricksWon, roundValue: o.roundValue };
+  });
+  return { kind: "round", round, lines, lastTrick: closedTrick };
+}
+
+// Executa automaticamente tudo que não é decisão do humano (início de partida,
+// deal, bots) e para assim que a vez for dele — ou quando há um interlúdio.
 function advance(): void {
   if (night.phase === "nightComplete") return draw();
 
   if (night.phase === "awaitingPartida") {
-    night = beginNextPartida(night, Math.random);
+    // usa o assento já anunciado no fim da partida anterior; na 1ª, sorteia
+    const seating = pendingSeating ?? nextSeating(night, Math.random);
+    pendingSeating = null;
+    night = startPartida(night, seating);
     lastTrick = null;
     return schedule(BOT_DELAY_MS);
   }
@@ -108,16 +150,29 @@ function advance(): void {
   return schedule(dispatch(chooseBotAction(partida, seat)));
 }
 
-// Desenha, espera, e só então segue. Limpar lastTrick aqui garante que a vaza
-// fique visível exatamente durante a pausa — nem menos, nem até a jogada seguinte.
+// Desenha, espera, e só então segue. Um interlúdio de PARTIDA espera o clique
+// (não agenda timer); um de RODADA e a vaza normal auto-avançam.
 function schedule(delay: number): void {
   draw();
   if (timer !== null) clearTimeout(timer);
+  timer = null;
+  if (interlude?.kind === "partida") return; // aguarda "Próxima partida"
+  const wait = interlude ? ROUND_INTERLUDE_MS : delay;
   timer = window.setTimeout(() => {
     timer = null;
+    interlude = null;
     lastTrick = null;
     guard(advance);
-  }, delay);
+  }, wait);
+}
+
+// Sair de um interlúdio pelo botão (ou fim do timer): limpa e segue.
+function continueFlow(): void {
+  if (timer !== null) clearTimeout(timer);
+  timer = null;
+  interlude = null;
+  lastTrick = null;
+  guard(advance);
 }
 
 // Rede de segurança do controlador: qualquer exceção inesperada mostra um aviso
@@ -175,11 +230,19 @@ function toggleQuemTemPoe(): void {
   draw();
 }
 
+function toggleHelp(): void {
+  showHelp = !showHelp;
+  draw();
+}
+
 function restart(): void {
   if (timer !== null) clearTimeout(timer);
   timer = null;
   declareQuemTemPoe = false;
+  showHelp = false;
   lastTrick = null;
+  interlude = null;
+  pendingSeating = null;
   night = createNight(ROSTER);
   guard(advance);
 }
@@ -202,6 +265,8 @@ function draw(): void {
     view,
     night,
     lastTrick,
+    interlude,
+    showHelp,
     humanId: HUMAN,
     standings: partialStandings(night),
     legalPredictions:
@@ -212,6 +277,8 @@ function draw(): void {
     onPredict: humanPredict,
     onPlay: humanPlay,
     onToggleQuemTemPoe: toggleQuemTemPoe,
+    onContinue: continueFlow,
+    onToggleHelp: toggleHelp,
     onRestart: restart,
   });
 }
