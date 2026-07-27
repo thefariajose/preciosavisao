@@ -44,6 +44,21 @@ export interface RenderProps {
   readonly onContinue: () => void;
   readonly onToggleHelp: () => void;
   readonly onRestart: () => void;
+  readonly onReconfigure: () => void;
+}
+
+// Tela de configuração, antes de a noite começar.
+export interface SetupProps {
+  readonly name: string;
+  readonly count: number;
+  readonly min: number;
+  readonly max: number;
+  readonly roster: readonly string[];
+  readonly showHelp: boolean;
+  readonly onName: (value: string) => void;
+  readonly onCount: (n: number) => void;
+  readonly onStart: () => void;
+  readonly onToggleHelp: () => void;
 }
 
 const SUIT_SYMBOL: Record<Suit, string> = {
@@ -99,8 +114,73 @@ export function render(root: HTMLElement, p: RenderProps): void {
   const children: HTMLElement[] = [main, scoreboard(p)];
   // overlays por cima de tudo
   if (p.interlude) children.push(interludeOverlay(p));
-  if (p.showHelp) children.push(helpOverlay(p));
+  if (p.showHelp) children.push(helpOverlay(p.onToggleHelp));
   root.replaceChildren(...children);
+}
+
+// ================= tela de configuração =================
+export function renderSetup(root: HTMLElement, p: SetupProps): void {
+  const box = h("section", "panel modal setup");
+  box.append(h("h1", "", "Previsão"));
+  box.append(h("p", "muted", "Um humano contra bots, com informação oculta. Configure a mesa."));
+
+  // nome do jogador
+  const nameField = h("label", "field");
+  nameField.append(h("span", "field-label", "Seu nome"));
+  const input = document.createElement("input");
+  input.id = "setup-name";
+  input.className = "text-input";
+  input.type = "text";
+  input.maxLength = 14;
+  input.value = p.name;
+  input.placeholder = "Você";
+  input.addEventListener("input", () => p.onName(input.value));
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") p.onStart();
+  });
+  nameField.append(input);
+  box.append(nameField);
+
+  // número de jogadores
+  const countField = h("div", "field");
+  countField.append(h("span", "field-label", "Jogadores na mesa"));
+  const opts = h("div", "count-opts");
+  for (let n = p.min; n <= p.max; n++) {
+    const b = h("button", `count-opt${n === p.count ? " on" : ""}`, String(n));
+    b.addEventListener("click", () => p.onCount(n));
+    opts.append(b);
+  }
+  countField.append(opts);
+  box.append(countField);
+
+  // prévia do elenco
+  const preview = h("div", "roster-preview");
+  preview.append(h("span", "field-label", `Você + ${p.count - 1} bots`));
+  const chips = h("div", "roster-chips");
+  p.roster.forEach((id, i) => {
+    chips.append(h("span", `roster-chip${i === 0 ? " you" : ""}`, id));
+  });
+  preview.append(chips);
+  box.append(preview);
+
+  const actions = h("div", "modal-actions setup-actions");
+  const start = h("button", "primary", "Começar");
+  start.addEventListener("click", p.onStart);
+  const rules = h("button", "secondary", "Regras");
+  rules.addEventListener("click", p.onToggleHelp);
+  actions.append(start);
+  actions.append(rules);
+  box.append(actions);
+
+  const wrap = h("div", "setup-wrap");
+  wrap.append(box);
+
+  const children: HTMLElement[] = [wrap];
+  if (p.showHelp) children.push(helpOverlay(p.onToggleHelp));
+  root.replaceChildren(...children);
+
+  // foco no nome ao abrir (sem roubar o foco se o usuário já está digitando)
+  if (document.activeElement !== input) input.focus();
 }
 
 // Botão de regras, sempre acessível na barra de contexto.
@@ -197,10 +277,10 @@ function partidaPanel(p: RenderProps): HTMLElement {
 }
 
 // ================= regras / ajuda =================
-function helpOverlay(p: RenderProps): HTMLElement {
+function helpOverlay(onClose: () => void): HTMLElement {
   const back = h("div", "overlay");
   back.addEventListener("click", (e) => {
-    if (e.target === back) p.onToggleHelp(); // clicar fora fecha
+    if (e.target === back) onClose(); // clicar fora fecha
   });
   const box = h("section", "panel modal help");
   box.append(h("h1", "", "Como se joga o Previsão"));
@@ -242,7 +322,7 @@ function helpOverlay(p: RenderProps): HTMLElement {
     box.append(sec);
   }
 
-  box.append(actionRow("Fechar", p.onToggleHelp));
+  box.append(actionRow("Fechar", onClose));
   back.append(box);
   return back;
 }
@@ -353,9 +433,14 @@ function nightEnd(p: RenderProps): HTMLElement {
       venceu ? "Você levou a noite. Mãos de mestre." : "A próxima é sua.",
     ),
   );
+  const actions = h("div", "modal-actions");
   const again = h("button", "primary", "Jogar de novo");
   again.addEventListener("click", p.onRestart);
-  box.append(again);
+  const reconf = h("button", "secondary", "Trocar jogadores");
+  reconf.addEventListener("click", p.onReconfigure);
+  actions.append(again);
+  actions.append(reconf);
+  box.append(actions);
   return box;
 }
 
@@ -401,13 +486,20 @@ function table(p: RenderProps): HTMLElement {
         ((b - v.yourSeat + v.numPlayers) % v.numPlayers),
     );
 
+  // O arco e o tamanho dos cartões se adaptam ao nº de jogadores: com 6, uma
+  // ferradura enxuta pelo alto; com 11, um arco largo descendo pelas laterais,
+  // cartões menores e um leve escalonamento radial para não se sobreporem.
+  const opp = opponents.length;
+  const spanDeg = Math.min(270, 130 + Math.max(0, opp - 5) * 28);
+  const compact = opp >= 8;
   opponents.forEach((seat, i) => {
-    const t = opponents.length === 1 ? 0.5 : i / (opponents.length - 1);
-    // arco de 160° a 20° pelo alto: deixa os cantos livres (medalhão à esquerda)
-    const angle = ((160 - t * 140) * Math.PI) / 180;
-    const x = 50 + 46 * Math.cos(angle);
-    const y = 50 - 36 * Math.sin(angle);
+    const t = opp === 1 ? 0.5 : i / (opp - 1);
+    const angle = ((90 + spanDeg / 2 - t * spanDeg) * Math.PI) / 180;
+    const inset = opp >= 7 && i % 2 === 1 ? 9 : 0; // alterna cartões para dentro
+    const x = 50 + (47 - inset) * Math.cos(angle);
+    const y = 48 - (43 - inset) * Math.sin(angle);
     const badge = playerBadge(v, seat, { mao, pe, active: v.toAct === seat });
+    if (compact) badge.classList.add("compact");
     badge.style.left = `${x}%`;
     badge.style.top = `${y}%`;
     felt.append(badge);

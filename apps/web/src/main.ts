@@ -12,6 +12,8 @@ import {
   legalPlays,
   legalPredictions,
   makeDeal,
+  MAX_PLAYERS,
+  MIN_PLAYERS,
   nextSeating,
   nightAction,
   partialStandings,
@@ -23,10 +25,11 @@ import {
   type PartidaAction,
   type Play,
 } from "@previsao/engine";
-import { render, type Interlude, type LastTrick } from "./render.js";
+import { render, renderSetup, type Interlude, type LastTrick } from "./render.js";
 
-const HUMAN = "Você";
-const ROSTER = [HUMAN, "Bia", "Caio", "Dora", "Elis", "Fábio"];
+// Pool de nomes de bots. Precisa ter ao menos MAX_PLAYERS nomes: se o humano
+// escolher um deles, filtramos e ainda sobram os 10 necessários para 11 mesas.
+const BOT_POOL = ["Bia", "Caio", "Dora", "Elis", "Fábio", "Gil", "Hugo", "Iara", "Juca", "Lena", "Nico"];
 
 // Ritmo da mesa. Vale a pena ter os dois separados: ler uma carta nova é rápido,
 // mas ler a vaza fechada inteira e quem levou pede um tempo a mais.
@@ -37,7 +40,13 @@ const BOT_DELAY_MS = TURBO ? 10 : 1500; // entre jogadas/previsões dos bots
 const TRICK_END_PAUSE_MS = TURBO ? 30 : 2200; // com a vaza completa, antes de limpar
 const ROUND_INTERLUDE_MS = TURBO ? 30 : 4000; // fim de rodada auto-avança (com botão de pular)
 
-let night: NightState = createNight(ROSTER);
+// Fase da app: escolher jogadores antes de começar a noite.
+let phase: "setup" | "playing" = "setup";
+let humanName = "Você";
+let numPlayers = 6;
+
+// night só passa a valer em startGame; um placeholder satisfaz o tipo até lá.
+let night: NightState = createNight(buildRoster("Você", 6));
 let timer: number | null = null;
 let declareQuemTemPoe = false;
 let showHelp = false;
@@ -58,7 +67,46 @@ let pendingSeating: readonly string[] | null = null;
 
 // O assento do humano MUDA a cada partida por causa do re-assento por bruta.
 function humanSeat(): number {
-  return night.seating.indexOf(HUMAN);
+  return night.seating.indexOf(humanName);
+}
+
+// Elenco: o humano + bots do pool, garantindo ids únicos (o motor exige).
+function buildRoster(name: string, count: number): string[] {
+  const bots = BOT_POOL.filter((b) => b !== name).slice(0, count - 1);
+  return [name, ...bots];
+}
+
+function readNameInput(): string | null {
+  const el = document.getElementById("setup-name");
+  return el instanceof HTMLInputElement ? el.value : null;
+}
+
+function resetTransient(): void {
+  if (timer !== null) clearTimeout(timer);
+  timer = null;
+  declareQuemTemPoe = false;
+  showHelp = false;
+  lastTrick = null;
+  interlude = null;
+  pendingSeating = null;
+}
+
+// Começa (ou reinicia) a noite com a config atual.
+function startGame(): void {
+  const typed = readNameInput();
+  if (typed !== null) humanName = typed;
+  humanName = humanName.trim() || "Você";
+  night = createNight(buildRoster(humanName, numPlayers));
+  phase = "playing";
+  resetTransient();
+  guard(advance);
+}
+
+// Volta para a tela de configuração.
+function reconfigure(): void {
+  resetTransient();
+  phase = "setup";
+  draw();
 }
 
 // Despacha uma ação. Detecta o que ela desencadeou (vaza fechada, fim de rodada,
@@ -235,20 +283,38 @@ function toggleHelp(): void {
   draw();
 }
 
+// "Jogar de novo": repete com o mesmo elenco.
 function restart(): void {
-  if (timer !== null) clearTimeout(timer);
-  timer = null;
-  declareQuemTemPoe = false;
-  showHelp = false;
-  lastTrick = null;
-  interlude = null;
-  pendingSeating = null;
-  night = createNight(ROSTER);
-  guard(advance);
+  startGame();
 }
 
 // --- Desenho --------------------------------------------------------------
 function draw(): void {
+  const app = document.getElementById("app")!;
+
+  if (phase === "setup") {
+    renderSetup(app, {
+      name: humanName,
+      count: numPlayers,
+      min: MIN_PLAYERS,
+      max: MAX_PLAYERS,
+      roster: buildRoster(humanName.trim() || "Você", numPlayers),
+      showHelp,
+      onName: (v) => {
+        humanName = v;
+      }, // sem redraw: o input mantém foco enquanto se digita
+      onCount: (n) => {
+        const typed = readNameInput();
+        if (typed !== null) humanName = typed; // preserva o nome ao redesenhar
+        numPlayers = n;
+        draw();
+      },
+      onStart: startGame,
+      onToggleHelp: toggleHelp,
+    });
+    return;
+  }
+
   const seat = humanSeat();
   const partida = night.partida;
   const view = partida ? playerView(partida, seat) : null;
@@ -261,13 +327,13 @@ function draw(): void {
   // cartas que a permitem ficam clicáveis, senão o motor rejeitaria a jogada.
   const declarable = plays.filter((c) => canDeclareQuemTemPoeNow(partida!, seat, c));
 
-  render(document.getElementById("app")!, {
+  render(app, {
     view,
     night,
     lastTrick,
     interlude,
     showHelp,
-    humanId: HUMAN,
+    humanId: humanName,
     standings: partialStandings(night),
     legalPredictions:
       yourTurn && view!.phase === "predicting" ? legalPredictions(partida!, seat) : [],
@@ -280,7 +346,8 @@ function draw(): void {
     onContinue: continueFlow,
     onToggleHelp: toggleHelp,
     onRestart: restart,
+    onReconfigure: reconfigure,
   });
 }
 
-guard(advance);
+draw(); // começa na tela de configuração
